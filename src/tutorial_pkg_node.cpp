@@ -7,7 +7,56 @@
   Laser data is published to the topic /scan.
 */
 
-#include "../include/Stopper.h"
+#include "ros/ros.h"
+#include "sensor_msgs/LaserScan.h"
+#include "nav_msgs/Odometry.h"
+#include "geometry_msgs/Twist.h"
+#include "std_msgs/Float64.h"
+#include <fstream>
+#include <time.h>
+#include <iomanip>
+
+using namespace std;
+
+
+double robotPoseX; // robot pose X 
+double robotPoseY;
+
+
+
+class Stopper{
+public:
+// Tunable parameters
+	constexpr const static double FORWARD_SPEED_LOW = 0.1;
+	constexpr const static double FORWARD_SPEED_HIGH = 0.23;
+	constexpr const static double FORWARD_SPEED_SHIGH = 0.4;
+	constexpr const static double FORWARD_SPEED_STOP = 0;
+	constexpr const static double TURN_LEFT_SPEED_HIGH = 1.0;
+	constexpr const static double TURN_LEFT_SPEED_LOW = 0.3;
+	constexpr const static double TURN_RIGHT_SPEED_HIGH = -1.8;  
+	constexpr const static double TURN_RIGHT_SPEED_LOW = -0.3;
+	constexpr const static double TURN_RIGHT_SPEED_MIDDLE = -0.6;
+	unsigned int STAGE = 0;
+	Stopper();
+	void startMoving();
+private:
+	ros::NodeHandle	node;
+	ros::Publisher commandPub;	// Publisher to	the	robot's	velocity command topic
+	ros::Subscriber laserSub;	// Subscriber to the robot's laser scan topic
+	ros::Subscriber odomSub;	// Subscriber to the robot's odom topic
+	bool keepMoving;	// Indicates whether the robot should continue moving
+	float frontRange = 100.0;  // laser range distance, initialize at a long distance. 
+	float leftRange = 100.0;
+	float rightRange = 100.0;
+	float rearRange = 100.0;
+	void moveForward(double forwardSpeed);
+	void moveStop();   //delete this line before passing to students
+	void moveForwardRight(const double turn_right_speed, const double move_forward_speed);	
+	void scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan);
+	void odomCallback(const nav_msgs::Odometry::ConstPtr& msg);
+	void displayMessages();
+};
+
 
 
 Stopper::Stopper(){
@@ -32,75 +81,16 @@ void Stopper::moveForward(double forwardSpeed){
 void Stopper::moveStop(){
 	geometry_msgs::Twist msg; 
 	msg.linear.x = FORWARD_SPEED_STOP;
+	msg.angular.z = FORWARD_SPEED_STOP;
 	commandPub.publish(msg);
 }
 
-void Stopper::moveLeft(double turn_left_speed){
-	geometry_msgs::Twist msg; 
-	msg.angular.z = turn_left_speed;
-	commandPub.publish(msg);
-}
-
-void Stopper::moveRight(double turn_right_speed){
+void Stopper::moveForwardRight(const double turn_right_speed, const double move_forward_speed){
 	geometry_msgs::Twist msg; 
 	msg.angular.z = turn_right_speed;
+	msg.linear.x = move_forward_speed;
 	commandPub.publish(msg);
 }
-
-// test
-void Stopper::keepMiddleTorward2ndGap(unsigned int rightClosestRangeIndex, unsigned int leftClosestRangeIndex){
-	int middleIndex;
-	middleIndex = ceil((720-rightClosestRangeIndex - leftClosestRangeIndex)/2.0);
-	ROS_INFO_STREAM("middleIndex " << middleIndex);
-	if(middleIndex > 20){
-		moveRight(TURN_RIGHT_SPEED_LOW);
-		ROS_INFO_STREAM("Move right a little ");
-	}
-	else if((middleIndex < -10)){
-		//moveLeft(TURN_LEFT_SPEED_LOW);
-		ROS_INFO_STREAM("Move left a little ");
-	}
-	else{
-		moveForward(FORWARD_SPEED_LOW/2.0);
-		ROS_INFO_STREAM("Move forward a little ");
-	}
-		
-}
-
-void Stopper::keepMoveAlongWall(double range2Wall){
-	ROS_INFO_STREAM("leftRange to the Wall: " << leftRange);
-	if(leftRange > (range2Wall+0.2)){
-		moveLeft(TURN_LEFT_SPEED_HIGH);
-		ROS_INFO_STREAM("Turn left a little ");
-		displayMessages();			
-	} 
-	if(leftRange < (range2Wall-0.2)){
-		moveRight(TURN_RIGHT_SPEED_MIDDLE);
-		ROS_INFO_STREAM("Turn right a little ");
-		displayMessages();
-	}
-	else{
-		moveForward(FORWARD_SPEED_LOW);	
-		ROS_INFO_STREAM("Move forward a little ");	
-		displayMessages();
-	}
-}
-
-/*   not working
-int Stopper::findClosestRangeIndex(int indexRangeMin, int indexRangeMax, const sensor_msgs::LaserScan::ConstPtr& laserScan){
-	float closestRange = laserScan->ranges[indexRangeMin];
-	int closestRangeIndex = indexRangeMin;
-	for (int currIndex = indexRangeMin + 1; currIndex <= indexRangeMax; currIndex++){
-		if (laserScan->ranges[currIndex] < closestRange){
-			closestRange = laserScan->ranges[currIndex];
-			closestRangeIndex = currIndex;
-		}
-	}
-	ROS_INFO_STREAM("closestRangeIndex" << closestRangeIndex);
-	return closestRangeIndex;
-}
-
-*/
 
 void Stopper::displayMessages(){
 		ROS_INFO_STREAM("STAGE: " << STAGE);
@@ -108,74 +98,17 @@ void Stopper::displayMessages(){
 		ROS_INFO_STREAM("leftRange: " << leftRange);  
 		ROS_INFO_STREAM("frontRange: " << frontRange); 
 		ROS_INFO_STREAM("rearRange: " << rearRange);
-		ROS_INFO_STREAM("robotHeadAngle: " << robotHeadAngle); 
 }
 
-
-// transform the points to golable coordination, create the map of the environment, write in the txt file
-void Stopper::transformMapPoint(ofstream& fp, double _obstacleRange, double _sonarX, double _sonarY,
-	double _sonarTh, double _robotTh, double _globalX, double _globalY)
-{
-	double transX, transY;
-	transX = (_obstacleRange * cos(_sonarTh) + _sonarX) * cos(_robotTh)- (_obstacleRange * sin(_sonarTh) + _sonarY) * sin(_robotTh) + _globalX;
-		    
-	transY = (_obstacleRange * cos(_sonarTh) + _sonarX) * sin(_robotTh) + (_obstacleRange * sin(_sonarTh) + _sonarY) * cos(_robotTh) + _globalY;	
-		
-	fp << setprecision(3)<< transX <<"  "<< setprecision(3) << 	transY << endl;
-}
-
-
-
-
-
-
-void Stopper::odomCallback(const nav_msgs::Odometry::ConstPtr& odomMsg){
-	//ROS_INFO("Seq: [%d]", odomMsg->header.seq);
-	//ROS_INFO("Position-> x: [%f], y: [%f], z: [%f]", odomMsg->pose.pose.position.x,odomMsg->pose.pose.position.y, odomMsg->pose.pose.position.z);
-	//ROS_INFO("Orientation-> x: [%f], y: [%f], z: [%f], w: [%f]", odomMsg->pose.pose.orientation.x, odomMsg->pose.pose.orientation.y, odomMsg->pose.pose.orientation.z, odomMsg->pose.pose.orientation.w);
-	//ROS_INFO("Vel-> Linear: [%f], Angular: [%f]", odomMsg->twist.twist.linear.x,odomMsg->twist.twist.angular.z);
-	//currentTime = ros::Time::now().toSec();
-	//moment = currentTime - beginTime;
-	odomVelFile << odomMsg->twist.twist.linear.x << "\n"; // record the moment and speed, for velocity figure
-	
-	Quaternion robotQuat;
-	robotQuat.x = odomMsg->pose.pose.orientation.x;
-	robotQuat.y = odomMsg->pose.pose.orientation.y;
-	robotQuat.z = odomMsg->pose.pose.orientation.z;
-	robotQuat.w = odomMsg->pose.pose.orientation.w;
-	EulerAngles robotAngles;	
-  	robotAngles = ToEulerAngles(robotQuat);
-  	robotHeadAngle = robotAngles.yaw;
-  	
+void Stopper::odomCallback(const nav_msgs::Odometry::ConstPtr& odomMsg){ 	
   	robotPoseX = odomMsg->pose.pose.position.x;
   	robotPoseY = odomMsg->pose.pose.position.y;
-  	transformMapPoint(odomMapFile, frontRange, 0, 0, 0, robotAngles.yaw, robotPoseX, robotPoseY);
-  	transformMapPoint(odomMapFile, rightRange, 0, 0, -1.57, robotAngles.yaw, robotPoseX, robotPoseY);
-  	transformMapPoint(odomMapFile, leftRange, 0, 0, 1.57, robotAngles.yaw, robotPoseX, robotPoseY);
 }
-
-
-
-
 
 
 //process the incoming laser scan message
 void Stopper::scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan){
-	//	Find the closest range between the defined minimum and maximum angles
-	ros::Rate rate(20);
-	
-	/*
-	int	minIndex = ceil((LEFT_SCAN_ANGLE_RAD - scan->angle_min) / scan->angle_increment);  // the transfermation is not right
-	int	maxIndex = floor((RIGHT_SCAN_ANGLE_RAD - scan->angle_min) / scan->angle_increment);
-	int frontIndex = floor((0 - scan->angle_min) / scan->angle_increment);		
-	float closestRange = scan->ranges[minIndex];
-	for (int currIndex = minIndex + 1; currIndex <= maxIndex; currIndex++){
-		if (scan->ranges[currIndex] < closestRange){
-			closestRange = scan->ranges[currIndex];
-		}
-	}
-	*/
-	
+	ros::Rate rate(20);		
 	frontRange = scan->ranges[0];
 	rightRange = scan->ranges[539];
 	leftRange = scan->ranges[180];
@@ -186,158 +119,51 @@ void Stopper::scanCallback(const sensor_msgs::LaserScan::ConstPtr& scan){
 	********************************************
 	*/
 	
-	// STAGE = 0, Initial stage, start moving towards the first gap before turing right
+	// STAGE = 0, Initial stage, start moving towards the first gap, until:
 	if (((rightRange < 0.38)||(frontRange < 1.0)) && STAGE==0){
 		ROS_INFO("Turn Right");
-		moveRight(TURN_RIGHT_SPEED_HIGH);
-		//displayMessages();
+		moveForwardRight(TURN_RIGHT_SPEED_HIGH, FORWARD_SPEED_HIGH);		
 	}
-	// finished first turning
 	
 	//If the robot is in the middle of the first gate, keep moving forward
-	if( (0.2 <leftRange) && (leftRange < 0.64) &&  (0.2 < rightRange) && (rightRange < 0.35) && (1.8< frontRange) && (frontRange < 1.9)){
+	if( (0.2 <leftRange) && (leftRange < 0.66) &&  (0.2 < rightRange) && (rightRange < 0.45) && (1.8< frontRange) && (frontRange < 1.96)){
 		STAGE = 1;
-
+		moveStop();
 		moveForward(FORWARD_SPEED_LOW);
-		//displayMessages();
-	}
-	
-	if( (frontRange > 1.3) && (STAGE ==1)){  // Move through 1st gap
-		moveForward(FORWARD_SPEED_LOW);
-		//displayMessages();
-	}
-	if((frontRange < 1.3)&&(STAGE ==1)){ //Moving forward ends
-		STAGE =2;
-		//displayMessages();	
-	}	
-	if((frontRange < 1.3) && (STAGE ==2)){  //turn right, torwarding the 2nd gap
-		moveRight(TURN_RIGHT_SPEED_LOW);
-		//displayMessages();
-		if((((rightRange > 2.1)||(rightRange < 0.65))&&(frontRange > 0.89)&&(leftRange > 0.56))||((rightRange > 1.7) && (leftRange > 0.54) && (frontRange > 1.15))){ //laser noise makes it hard to find the right conditions
-			STAGE = 3;				
-		}
-	}
-	if((STAGE==3)){
-		moveForward(FORWARD_SPEED_LOW);			
-		/*
-		********************************************
-		****** find the closest range index ********
-		*************** right side *****************
-		********************************************
-		*/
-		int indexRightRangeMin = 600;
-		int indexRightRangeMax = 719;
-		float closestRightRange = scan->ranges[indexRightRangeMin];
-		int closestRightRangeIndex = indexRightRangeMin;
-		for (int currRightIndex = indexRightRangeMin + 1; currRightIndex <= indexRightRangeMax; currRightIndex++){
-			if (scan->ranges[currRightIndex] < closestRightRange){
-				closestRightRange = scan->ranges[currRightIndex];
-				closestRightRangeIndex = currRightIndex;
-			}
-		}
-		ROS_INFO_STREAM("closestRightRangeIndex: " << closestRightRangeIndex <<" "<< closestRightRange);		
-		/*
-		********************************************
-		****** find the closest range index ********
-		*************** left  side *****************
-		********************************************
-		*/
-		int indexLeftRangeMin = 0;
-		int indexLeftRangeMax = 150;
-		float closestLeftRange = scan->ranges[indexLeftRangeMin];
-		int closestLeftRangeIndex = indexLeftRangeMin;
-		for (int currLeftIndex = indexLeftRangeMin + 1; currLeftIndex <= indexLeftRangeMax; currLeftIndex++){
-			if (scan->ranges[currLeftIndex] < closestLeftRange){
-				closestLeftRange = scan->ranges[currLeftIndex];
-				closestLeftRangeIndex = currLeftIndex;
-			}
-		}
-		ROS_INFO_STREAM("closestLeftRangeIndex: " << closestLeftRangeIndex <<" "<< closestLeftRange);		
-		
-		// Adjust heading angle torwards the 2nd gap
-		if ((rightRange > 0.25) && (leftRange > 0.25)){  // make sure the robot won't adjust head angle when nearby the pillars
-			keepMiddleTorward2ndGap(closestRightRangeIndex,closestLeftRangeIndex);
-		}		
+		ROS_INFO("Arriving at the middle======");
 		displayMessages();
-		
-		// keep straight going through the 2nd gap
-		if((closestLeftRange < 0.22)&& (closestRightRange < 0.22)){
-			STAGE = 4;			// go through 2nd gap		
-			displayMessages();				
-		}
+		if(rearRange > 0.69){
+            ROS_INFO("Arriving at the middle of gap 1, stop");
+            moveStop();
+            ros::shutdown();
+        }
 	}
-	if((rightRange < 0.5 ) && (frontRange > 0.5) && (STAGE==4)){
-		moveForward(FORWARD_SPEED_LOW);			//go through 2nd gap		
-		displayMessages();			
-	}
-	else if((frontRange < 0.5)&& (STAGE==4)){ 
-		STAGE = 5;	//passed 2nd gap, prepare to turn right	 		
-	}
-	if(((rightRange > 1.2)&& (rightRange < 2.2)) && (STAGE == 5)){
-		moveRight(TURN_RIGHT_SPEED_MIDDLE); // turn right
-		displayMessages();	
-		if((frontRange > 0.8) && (leftRange < 0.335) && ((rightRange > 2.0)||(rightRange < 0.55))){
-			STAGE = 6; // stop turning right, prepare to move forward along wall bottom
-		}	
-	}			
-	if( (frontRange > 0.32) && (STAGE == 6)){
-		moveForward(FORWARD_SPEED_LOW);
-		double leftRange2Wall = 0.32;
-		keepMoveAlongWall(leftRange2Wall); // move forward, parallel to the left wall	
-		displayMessages();
-	}
-	else if( (frontRange < 0.32) && (STAGE == 6)){
-		STAGE = 7;  // turn right, parallel to the wall (0,0) - (2.5, 0)
-		displayMessages(); 				
-	}
-	if((frontRange < 2.2)&& (STAGE == 7)){  // turn right, parallel to the wall (0,0) - (2.5, 0)		
-		moveRight(TURN_RIGHT_SPEED_MIDDLE);
-		displayMessages(); 
-	    if((leftRange < 0.35) && (leftRange > 0.32)  && (frontRange > 1.7) && (frontRange < 2.2) && ((rightRange < 1.0)||(rightRange > 2.0))){
-	    	STAGE = 8;  // Stop turning right, prepare to move forward
-			displayMessages();  	
-	    } 	
-	}
-	if (STAGE == 8){
-		moveForward(FORWARD_SPEED_HIGH);
-		double leftRange2Wall2Chagrer = 0.32;
-		keepMoveAlongWall(leftRange2Wall2Chagrer); // move forward, parallel to the left wall
-		if((frontRange < 1.2) && (frontRange > 1.1)){
-			STAGE = 9;
-			moveStop();
-			displayMessages(); 
-			ROS_INFO_STREAM("ARRIVING AT CHARGER STATION");					
-		}			
-	}						
+						
 }
 
 void Stopper::startMoving(){
+    int start = 0; 
 	ros::Rate rate(20);
 	ROS_INFO("Start moving");
-	odomVelFile.open("/home/zuyuan/ros_ws/src/tutorial_pkg/odomVelData.csv",ios::out | ios::app);
-	odomMapFile.open("/home/zuyuan/ros_ws/src/tutorial_pkg/odomMapData.csv",ios::out | ios::app);
 	// keep spinning loop until user presses Ctrl+C
 	while (ros::ok() && keepMoving){
-		if(STAGE ==0){  // Comment before public to student
-			moveForward(FORWARD_SPEED_LOW);
-			displayMessages();
-			
+		if(STAGE ==0){  			
+			if(start < 10){ // start the robot, keep moving forward
+			    moveForward(FORWARD_SPEED_HIGH);
+			} 
+			start++;
+			displayMessages();			
 		}
 		ros::spinOnce(); // Allow ROS to process incoming messages
 		rate.sleep();   // or loop_rate.sleep();
 	}
-	odomVelFile.close();
-	odomMapFile.close();
 }
 
 int main(int argc, char **argv)
 {	// Initiate new ROS node named "stopper"
-   ros::init(argc, argv, "stopper");
-   
-   // Create new stopper object
-   
+   ros::init(argc, argv, "stopper");  
+   // Create new stopper object  
    Stopper stopper;
-   beginTime = ros::Time::now().toSec(); // start counting time, for velocity figure
    // Start the movement
    stopper.startMoving();
 	
